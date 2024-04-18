@@ -88,11 +88,10 @@ function App() {
     async (offer) => {
       log("Offer received");
 
-      // Use the WebRTC API to setup a new peer connection.
-      localPeerConnection = new RTCPeerConnection();
-
-      // This callback has a scary name because ICE is a complex topic. In this case, it's
-      // called when we call `setLocalDescription(answer)` on this peer connection.
+      // We're reusing the localPeerConnection we created when clicking the `Connect` button,
+      // but we're setting up a new event handler for ICE candidates.
+      // In this case, the function will run when we call `setLocalDescription(answer)` on this peer connection.
+      // When that happens, we want to send our answer to the signalling server.
       localPeerConnection.onicecandidate = (event) => {
         log("On ICE Candidate invoked");
         if (!event.candidate) {
@@ -104,12 +103,6 @@ function App() {
           });
         }
       };
-      localPeerConnection.onaddstream = addRemoteStreamToDom;
-
-      // Make our local stream available to the peer connection.
-      localStream.getTracks().forEach((track) => {
-        localPeerConnection.addTrack(track, localStream);
-      });
 
       // Generate the answer to the offer.
       await localPeerConnection.setRemoteDescription(offer);

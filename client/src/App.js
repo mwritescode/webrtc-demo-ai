@@ -8,6 +8,11 @@ import { v4 as uuid } from "uuid";
 let localStream = undefined; // The local video stream from the user's camera.
 let localPeerConnection = undefined; // The WebRTC peer connection with the other client.
 
+// Logging utility that adds the current timestamp to the log message.
+const log = (message) => {
+  console.log(`${new Date().toISOString()} - ${message}`);
+};
+
 function App() {
   const [connectButtonDisabled, setConnectButtonDisabled] =
     React.useState(false);
@@ -30,7 +35,7 @@ function App() {
       const localPlayer = document.getElementById("localPlayer");
       localPlayer.srcObject = stream;
       localStream = stream;
-      console.log("Local Stream set up");
+      log("Local Stream set up");
     } catch (error) {
       console.error("Error setting up local stream:", error);
     }
@@ -43,12 +48,45 @@ function App() {
     ws.current.send(JSON.stringify({ type, body }));
   };
 
+  // This function is called when the "Connect" button is clicked.
+  const startConnection = async () => {
+    // User the WebRTC API to setup a new peer connection.
+    localPeerConnection = new RTCPeerConnection();
+
+    // This callback has a scary name because ICE is a complex topic. In this case, it's
+    // called when we call `setLocalDescription(offer)` on this peer connection.
+    localPeerConnection.onicecandidate = (event) => {
+      log("On ICE Candidate invoked");
+      if (!event.candidate) {
+        const offer = localPeerConnection.localDescription;
+        log("Sending offer");
+        sendWsMessage("send_offer", {
+          userId,
+          sdp: offer,
+        });
+      }
+    };
+
+    localPeerConnection.onaddstream = addRemoteStreamToDom;
+
+    // Make our local stream available to the peer connection.
+    localStream.getTracks().forEach((track) => {
+      localPeerConnection.addTrack(track, localStream);
+    });
+
+    // Generate the offer to send to the signalling server.
+    const offer = await localPeerConnection.createOffer();
+    await localPeerConnection.setLocalDescription(offer);
+
+    setConnectButtonDisabled(true);
+  };
+
   // This logic is run when the client receives an offer from another client.
   // It happens when this client has already sent an offer to the signalling server, and
   // a second client then connects and sends its offer.
   const receiveOfferAndSendAnswer = useCallback(
     async (offer) => {
-      console.log("Offer received");
+      log("Offer received");
 
       // Use the WebRTC API to setup a new peer connection.
       localPeerConnection = new RTCPeerConnection();
@@ -56,10 +94,10 @@ function App() {
       // This callback has a scary name because ICE is a complex topic. In this case, it's
       // called when we call `setLocalDescription(answer)` on this peer connection.
       localPeerConnection.onicecandidate = (event) => {
-        console.log("On ICE Candidate invoked");
+        log("On ICE Candidate invoked");
         if (!event.candidate) {
           const answer = localPeerConnection.localDescription;
-          console.log("Sending answer");
+          log("Sending answer");
           sendWsMessage("send_answer", {
             userId,
             sdp: answer,
@@ -82,7 +120,7 @@ function App() {
   );
 
   const addRemoteStreamToDom = (event) => {
-    console.log("My peer has added a stream. Adding to DOM.");
+    log("My peer has added a stream. Adding to DOM.");
     const remotePlayer = document.getElementById("peerPlayer");
     remotePlayer.srcObject = event.stream;
   };
@@ -91,12 +129,13 @@ function App() {
   // This is only used to send and receive SDP messages, which are
   // the offers and answers that are used to establish the WebRTC connection.
   useEffect(() => {
+    log("Setting up WebSocket connection");
     const url = "ws://localhost:8090";
     const wsClient = new WebSocket(url);
     ws.current = wsClient;
 
     wsClient.onopen = () => {
-      console.log("WebSocket connected to signalling server at", url);
+      log(`WebSocket connected to signalling server at ${url}`);
       setUserId(uuid());
       setupLocalStream();
     };
@@ -107,11 +146,11 @@ function App() {
       const { type, body } = JSON.parse(event.data);
       switch (type) {
         case "offer_sdp_received":
-          console.log("offer_sdp_received");
+          log("offer_sdp_received event received from signalling server");
           receiveOfferAndSendAnswer(body);
           break;
         case "answer_sdp_received":
-          console.log("answer_sdp_received");
+          log("answer_sdp_received event received from signalling server");
           localPeerConnection?.setRemoteDescription(body);
           break;
         default:
@@ -119,39 +158,6 @@ function App() {
       }
     };
   }, [receiveOfferAndSendAnswer, userId, ws]);
-
-  // This function is called when the "Connect" button is clicked.
-  const startConnection = async () => {
-    // User the WebRTC API to setup a new peer connection.
-    localPeerConnection = new RTCPeerConnection();
-
-    // This callback has a scary name because ICE is a complex topic. In this case, it's
-    // called when we call `setLocalDescription(offer)` on this peer connection.
-    localPeerConnection.onicecandidate = (event) => {
-      console.log("On ICE Candidate invoked");
-      if (!event.candidate) {
-        const offer = localPeerConnection.localDescription;
-        console.log("Sending offer");
-        sendWsMessage("send_offer", {
-          userId,
-          sdp: offer,
-        });
-      }
-    };
-
-    localPeerConnection.onaddstream = addRemoteStreamToDom;
-
-    // Make our local stream available to the peer connection.
-    localStream.getTracks().forEach((track) => {
-      localPeerConnection.addTrack(track, localStream);
-    });
-
-    // Generate the offer to send to the signalling server.
-    const offer = await localPeerConnection.createOffer();
-    await localPeerConnection.setLocalDescription(offer);
-
-    setConnectButtonDisabled(true);
-  };
 
   return (
     <div className="App">

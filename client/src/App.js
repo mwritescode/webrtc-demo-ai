@@ -1,7 +1,9 @@
 import React, { useEffect, useCallback } from "react";
-import { Button, Typography } from "antd";
+import {  Button, Typography, Space, Select, Radio, message  } from "antd";
 import "./App.css";
 import { v4 as uuid } from "uuid";
+import {drawFaceLandmarks, drawSegmentationResult} from "./ai/utils/drawing";
+import { createFaceLandmarker, createSelfieSegmenter } from "./ai/utils/frameworkSwitcher";
 
 // LD: A good web SWE would be able to integrate these variables into the React lifecycle.
 // I am not a good web SWE.
@@ -13,10 +15,112 @@ const log = (message) => {
   console.log(`${new Date().toISOString()} - ${message}`);
 };
 
+const radioOptions= [
+  { label: 'MediaPipe', value: 'mediapipe' },
+  { label: 'TensorFlow.js', value: 'tfjs' },
+  { label: 'ONNX', value: 'onnx'},
+];
+
 function App() {
   const [connectButtonDisabled, setConnectButtonDisabled] =
     React.useState(false);
   const [userId, setUserId] = React.useState("");
+  const ws = React.useRef(null);
+
+  const localVideoElementRef = React.useRef(null);
+  const localCanvasElementRef = React.useRef(null);
+  const localCanvasCtxRef = React.useRef(null);
+
+  const [frameworkAI, setFrameworkAI] = React.useState("mediapipe");
+  const [selfieSegmenter, setSelfieSegmenter] = React.useState(null);
+  const [faceLandmarker, setFaceLandmarker] = React.useState(null);
+
+  // The ref is needed because requestAnimationFrame is asynchoronous, which means it 
+  // might not run until after the useEffect hook has finished. If the filterType state
+  // changes in the meantime, the callback will still use the old filterType state.
+  const [filterType, setFilterType] = React.useState("none");
+  const filterTypeRef = React.useRef(filterType);
+
+  const handleFilterChange = (value) => {
+    setFilterType(value);
+    console.log(`Filter changed to ${value}`);
+  };
+  
+  const handleFrameworkChange = ({target: {value}}) => {
+    setFrameworkAI(value);
+    console.log(`AI framework changed to ${value}`);
+  };
+
+  const predictFaceLandmarks = useCallback(
+    async (canvasElement) => {
+      const startTime = performance.now();
+      const landmarks = await faceLandmarker.detect(canvasElement);
+      const endTime = performance.now();
+      const executionTime = endTime - startTime;
+      const fps = 1000 / executionTime;
+      return [landmarks, fps];
+    },
+    [faceLandmarker]
+  );
+
+  const predictSegmentation = useCallback(
+    async (canvasElement) => {
+      const startTime = performance.now();
+      const results = await selfieSegmenter.segment(canvasElement);
+      const endTime = performance.now();
+      const executionTime = endTime - startTime;
+      const fps = 1000 / executionTime;
+      return [results, fps];
+    },
+    [selfieSegmenter]
+  );
+
+  const updateSpeedStats = (currentSpeed) => {
+    const statsText = document.getElementById("speedStats");
+    if (currentSpeed) {
+      statsText.textContent = `Speed: ${Math.round(currentSpeed)} FPS`;
+    } else {
+      statsText.textContent = "Activate a filter to view speed stats";
+    }
+  }
+
+  const applyFiltersOnCanvas = useCallback(
+    async () => {
+      let faceLandmarks = null;
+      let segmentationMask = null;
+      let speedStats = null;
+
+      const canvasElement = localCanvasElementRef.current;
+      const canvasCtx = localCanvasCtxRef.current;
+
+      // Clear the canvas
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+      // Update the canvas depending on the filter type
+      switch (filterTypeRef.current) {
+        case "mesh":
+          [faceLandmarks, speedStats] = await predictFaceLandmarks(localVideoElementRef.current);
+          canvasCtx.drawImage(localVideoElementRef.current, 0, 0, canvasElement.width, canvasElement.height);
+          drawFaceLandmarks(canvasCtx, faceLandmarks);
+          break;
+        case "bg":
+          [segmentationMask, speedStats] = await predictSegmentation(localVideoElementRef.current);
+          drawSegmentationResult(canvasElement, canvasCtx, segmentationMask, localVideoElementRef.current);
+          break;
+        default:
+          canvasCtx.drawImage(localVideoElementRef.current, 0, 0, canvasElement.width, canvasElement.height);
+          break;
+      }
+
+      updateSpeedStats(speedStats);
+
+      // Schedule the next call to applyFilterAndDraw
+      if (filterTypeRef.current !== 'none') {
+        requestAnimationFrame(async () => await applyFiltersOnCanvas());
+      }
+    },
+    [predictFaceLandmarks, predictSegmentation]
+  );
 
   // This function sets up the device to be used for the call and adds the video to the DOM.
   const setupLocalStream = async () => {
@@ -32,16 +136,43 @@ function App() {
         audio: false,
       });
 
-      const localPlayer = document.getElementById("localPlayer");
-      localPlayer.srcObject = stream;
-      localStream = stream;
-      log("Local Stream set up");
+      const localVideo = document.createElement("video");
+      localVideo.srcObject = stream;
+      localVideo.autoplay = true;
+
+      // Set the ref's current value to the video element
+      localVideoElementRef.current = localVideo;
+      localCanvasElementRef.current = document.getElementById("localPlayer");
+      localCanvasCtxRef.current = localCanvasElementRef.current.getContext("2d");
+
+      localVideo.addEventListener("loadedmetadata", () => {
+
+        // Set the pixel dimensions of the canvas to match the video size
+        localCanvasElementRef.current.width = localVideo.videoWidth;
+        localCanvasElementRef.current.height = localVideo.videoHeight;
+        const localCanvas = localCanvasElementRef.current;
+        const canvasCtx = localCanvasCtxRef.current;
+
+        const drawVideo = () => {
+          if (localVideo.readyState === localVideo.HAVE_ENOUGH_DATA) {
+            // Clear the canvas and then draw the video on it
+            canvasCtx.clearRect(0, 0, localCanvas.width, localCanvas.height);
+            canvasCtx.drawImage(localVideo, 0, 0);
+          }
+  
+          requestAnimationFrame(drawVideo);
+        };
+  
+        requestAnimationFrame(drawVideo);
+        localStream = localCanvas.captureStream(30);
+      });
+
+      log("Local stream set up");
+
     } catch (error) {
       console.error("Error setting up local stream:", error);
     }
   };
-
-  const ws = React.useRef(null);
 
   // Utility to send stringified messages to the WebSocket server.
   const sendWsMessage = (type, body) => {
@@ -134,6 +265,41 @@ function App() {
     };
   }, []);
 
+  // Update the ref whenever filterType changes
+  useEffect(() => {
+    filterTypeRef.current = filterType;
+  }, [filterType]);
+
+  // Warn the user if they try to use the face mesh filter with a framework other than Mediapipe.
+  useEffect(() => {
+    if (frameworkAI !== "mediapipe" && filterType === "mesh") {
+      message.warning('Face mesh only supports Mediapipe at the moment, falling back on that.');
+    }
+  }, [frameworkAI, filterType]);
+
+  // Initialize the models when the component mounts. It should
+  // rerun every time we change the framework we are working with.
+  useEffect(() => {
+    const initializeModels = async () => {
+      const landmarker = await createFaceLandmarker(frameworkAI);
+      const segmenter = await createSelfieSegmenter(frameworkAI);
+      setFaceLandmarker(landmarker);
+      setSelfieSegmenter(segmenter);
+    };
+
+    initializeModels();      
+  }, [frameworkAI]);
+
+  // Checks whether the filter should be applied and calls the applyFiltersOnCanvas function.
+  useEffect(() => {
+    async function applyFilter() {
+      if (filterType !== 'none' && faceLandmarker && selfieSegmenter) {
+        await applyFiltersOnCanvas();
+      }
+    }
+    applyFilter();
+  }, [filterType, faceLandmarker, selfieSegmenter, applyFiltersOnCanvas]);
+
   useEffect(() => {
     ws.current.onmessage = (event) => {
       const { type, body } = JSON.parse(event.data);
@@ -169,20 +335,55 @@ function App() {
             </Button>
           </div>
         </div>
+        <div className="wrapper-row">
+          <div className="wrapper">
+            <Typography.Text strong style={{marginTop: 60, paddingBottom: 5}}>AI Filters Options:</Typography.Text>
+            <Typography.Text style={{paddingBottom: 5}}>
+              Note that the face mesh filter only supports Mediapie for now, 
+              <br></br>so changing the framework only reloads the model.
+            </Typography.Text>
+            <div>
+              <Space>
+              <Typography.Text>Filter Type:</Typography.Text>
+              <Select defaultValue="none" style={{ width: 120 }} onChange={handleFilterChange}>
+                <Select.Option value="none">None</Select.Option>
+                <Select.Option value="mesh">Face Mesh</Select.Option>
+                <Select.Option value="bg">Background Removal</Select.Option>
+              </Select>
+              </Space>
+            </div>
+            <div>
+              <Space>
+              <Typography.Text style={{paddingTop: 10}}>Framework:</Typography.Text>
+              <Radio.Group 
+                style={{paddingTop: 10}} 
+                options={radioOptions} 
+                onChange={handleFrameworkChange} 
+                value={frameworkAI} 
+                optionType="button" 
+              />
+              </Space>
+            </div>
+          </div>
+        </div>
         <div className="playerContainer" id="playerContainer">
-          <div>
+          <div style={{display: 'flex', flexDirection: 'column'}}>
             <h1 style={{ color: "#003eb3", marginBottom: 10 }}>You</h1>
-            <video
+            <canvas
               id="localPlayer"
-              autoPlay
               style={{
                 width: 640,
-                height: 480,
+                height: 360,
                 border: "5px solid #003eb3",
+                borderTop: "65px solid #003eb3",
+                borderBottom: "65px solid #003eb3",
                 borderRadius: 5,
                 backgroundColor: "#003eb3",
               }}
             />
+            <Typography.Text 
+              id="speedStats" 
+              style={{paddingTop: 10}}>Activate a filter to view speed stats</Typography.Text>
           </div>
 
           <div>

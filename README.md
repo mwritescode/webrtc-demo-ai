@@ -7,6 +7,15 @@ This project is a simple WebRTC demo that establishes a direct P2P WebRTC connec
 
 You can find more details in the README files of each part, and in [this Notion page](https://www.notion.so/bendingspoons/WebRTC-07cb99c4a579450dbe441db77ac434b4?pvs=4).
 
+## 🤖 AI Features
+
+The two supported models in this demo are [FaceMesh](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Face%20Mesh%20V2.pdf) and [SelfieSegmenter](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfie%20Segmentation.pdf) from the MediaPipe team. 
+- Conversion from the original TFLite format to ONNX was done through [tf2onnx](https://github.com/onnx/tensorflow-onnx).
+- Conversion from ONNX to TensorFlow.js format was done through a combination of [onnx2tf](https://github.com/PINTO0309/onnx2tf) and [tensorflowjs-cnverter](https://github.com/tensorflow/tfjs/tree/master/tfjs-converter).
+
+All models run on GPU with the exception of the `onnxruntime-web` segmenter, which had quality-related issues.
+
+
 ## 🌐 Making this work across networks
 
 This demo works out of the box on localhost.

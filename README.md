@@ -15,6 +15,9 @@ The two supported models in this demo are [FaceMesh](https://storage.googleapis.
 
 All models run on GPU with the exception of the `onnxruntime-web` segmenter, which had quality-related issues.
 
+**Disclaimer:** not a JS expert at all so I'm pretty sure the integration of the features in the app could be optimized. A couple of known possibilities:
+- Using [Web Workers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers) for the AI models so that we don't block the main thread.
+- [Insertable Streams](https://developer.mozilla.org/en-US/docs/Web/API/Insertable_Streams_for_MediaStreamTrack_API) could be used instead of the `Canvas` to modify and display the camera stream, tho I'm not sure how widely supported they are.
 
 ## 🌐 Making this work across networks
 
